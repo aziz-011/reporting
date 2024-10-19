@@ -60,7 +60,7 @@ else:
         st.success(f"Analysis for {machine} marked as completed.")
 
         # Send notification email when analysis is marked done
-        send_email("admin_email@example.com", machine)
+        send_email("aabengandia@kumulus.com", machine)
 
     # View machines that are pending analysis
     st.write("Machines pending analysis:")
