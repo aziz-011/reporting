@@ -1,68 +1,71 @@
 import streamlit as st
 import pandas as pd
-import yagmail
 import os
+from datetime import datetime
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import base64
+from email.mime.text import MIMEText
+
+SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
 
-# Email setup
-def send_email(notification_email, machine_name):
-    yag = yagmail.SMTP("aziz.bengandia11@gmail.com", "20999252A")
-    subject = "Analysis Completed"
+# Function to authenticate and send an email
+def send_email(subject, body, recipient):
+    creds = None
+
+    # The file token.json stores the user's access and refresh tokens
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    # If no valid credentials available, login
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        # Save the credentials for future runs
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        message = MIMEText(body)
+        message['to'] = recipient
+        message['subject'] = subject
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        # Send the email
+        service.users().messages().send(userId="me", body={'raw': raw}).execute()
+        st.success(f"Email notification sent to {recipient}.")
+    except Exception as error:
+        st.error(f'Error occurred: {error}')
+
+
+# Example call in your app:
+def notify_machine_done(machine_name):
+    subject = f"Machine {machine_name} Analysis Completed"
     body = f"The analysis for machine {machine_name} has been completed."
-    yag.send(to=notification_email, subject=subject, contents=body)
-    st.success(f"Email notification sent to {notification_email}.")
+    recipient = "recipient@example.com"  # Adjust recipient email here
+    send_email(subject, body, recipient)
 
 
-# Admin login check
-def admin_login():
-    username = st.sidebar.text_input("Admin Username")
-    password = st.sidebar.text_input("Admin Password", type="password")
-    if username == "admin" and password == "adminpassword":
-        return True
-    return False
-
-
-# Initialize data for machines
-if not os.path.exists("machines.csv"):
-    df = pd.DataFrame(columns=["Machine Name", "Analysis Completed"])
-    df.to_csv("machines.csv", index=False)
-
-# Read machine data
-df = pd.read_csv("machines.csv")
-
-st.title("Machine Analysis Tracking")
+# Rest of your Streamlit app (simplified example):
+df = pd.DataFrame(columns=["Machine Name", "Date Added", "Date Completed", "Analysis Completed"])
 
 # Admin Panel
-if admin_login():
-    st.sidebar.write("Admin Panel")
+machine_name = st.text_input("Enter Machine Number:")
 
-    # Add a new machine
-    machine_name = st.sidebar.text_input("Enter Machine Name:")
-    if st.sidebar.button("Add Machine"):
-        new_row = pd.DataFrame({"Machine Name": [machine_name], "Analysis Completed": [False]})
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv("machines.csv", index=False)
-        st.sidebar.success(f"Machine {machine_name} added.")
+if st.button("Add Machine"):
+    df = df.append({"Machine Name": f"ID{machine_name}", "Date Added": datetime.now()}, ignore_index=True)
+    st.success(f"Machine ID{machine_name} added.")
 
-    # View and manage all machines
-    st.write("All Machines:")
-    st.write(df)
-
-# Standard User View
-else:
-    st.sidebar.write("Standard User Panel")
-
-    # Select machine and mark analysis as done
-    machine = st.selectbox("Select a machine", df["Machine Name"])
-    if st.button(f"Mark {machine} as Done"):
-        df.loc[df["Machine Name"] == machine, "Analysis Completed"] = True
-        df.to_csv("machines.csv", index=False)
-        st.success(f"Analysis for {machine} marked as completed.")
-
-        # Send notification email when analysis is marked done
-        send_email("aabengandia@kumulus.com", machine)
-
-    # View machines that are pending analysis
-    st.write("Machines pending analysis:")
-    st.write(df[df["Analysis Completed"] == False])
-
+# Mark machine as done and send notification
+if st.button(f"Mark {machine_name} as Done"):
+    df.loc[df["Machine Name"] == f"ID{machine_name}", "Date Completed"] = datetime.now()
+    st.success(f"Analysis for {machine_name} marked as done.")
+    notify_machine_done(f"ID{machine_name}")
