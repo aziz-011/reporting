@@ -2,6 +2,58 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
+import base64
+from email.mime.text import MIMEText
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+
+# Gmail API Scopes
+SCOPES = ['https://www.googleapis.com/auth/gmail.send']
+
+
+# Function to authenticate and send an email
+def send_email(subject, body, recipient):
+    creds = None
+
+    # The file token.json stores the user's access and refresh tokens
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    # If no valid credentials available, log in
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        # Save the credentials for future runs
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+
+    try:
+        # Call the Gmail API
+        service = build('gmail', 'v1', credentials=creds)
+        message = MIMEText(body)
+        message['to'] = recipient
+        message['subject'] = subject
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        # Send the email
+        service.users().messages().send(userId='me', body={'raw': raw}).execute()
+        st.success(f"Email notification sent to {recipient}.")
+    except Exception as error:
+        st.error(f'An error occurred: {error}')
+
+
+# Example usage: sending an email when a machine is completed
+def notify_machine_done(machine_name):
+    subject = f"Machine {machine_name} Analysis Completed"
+    body = f"The analysis for machine {machine_name} has been completed."
+    recipient = "recipient@example.com"  # Adjust to your recipient
+    send_email(subject, body, recipient)
 
 
 # Function to get the current week number and year
@@ -58,36 +110,6 @@ def mark_machine_as_done(df, machine_name):
     return df
 
 
-# Function to filter incomplete machines and ensure done ones are only removed on Fridays
-def filter_incomplete_machines(df):
-    today = datetime.now()
-    if today.weekday() == 4:  # 4 corresponds to Friday
-        return df[df["Analysis Completed"] == False]
-    else:
-        return df
-
-
-# Function to handle CSV rollover at the end of the week (on Friday)
-def rollover_to_next_week():
-    week, year = get_current_week_and_year()
-    new_csv_filename = f"week_{week + 1}_{year}.csv"  # Create new CSV for the next week
-
-    # If today is Friday, we update the CSV and prepare for the next week
-    today = datetime.now()
-    if today.weekday() == 4:  # 4 corresponds to Friday
-        # Save completed machines in this week's CSV
-        completed_df = df[df["Analysis Completed"] == True]
-        completed_df.to_csv(f"completed_week_{week}_{year}.csv", index=False)
-
-        # Carry over incomplete machines to next week
-        incomplete_df = df[df["Analysis Completed"] == False]
-
-        # Create a new CSV for next week and add incomplete machines
-        if not incomplete_df.empty:
-            incomplete_df.to_csv(new_csv_filename, index=False)
-        st.success(f"Weekly rollover completed. Incomplete machines moved to {new_csv_filename}.")
-
-
 # Main application starts here
 st.title("Machine Analysis Tracking")
 
@@ -119,8 +141,8 @@ if admin_login():
 else:
     st.sidebar.write("Standard User Panel")
 
-    # Filter machines to show only incomplete ones and only remove completed ones on Friday
-    visible_df = filter_incomplete_machines(df)
+    # Filter machines to show only incomplete ones
+    visible_df = df[df["Analysis Completed"] == False]
 
     # Select machine and mark analysis as done
     if not visible_df.empty:
@@ -129,12 +151,6 @@ else:
             df = mark_machine_as_done(df, machine)
             df.to_csv(current_csv_filename, index=False)
             st.success(f"Analysis for {machine} marked as completed on {datetime.now().strftime('%Y-%m-%d')}.")
+            notify_machine_done(machine)  # Send email notification
     else:
         st.write("No pending machines for analysis.")
-
-    # View machines that are pending analysis
-    st.write("Machines pending analysis:")
-    st.write(visible_df)
-
-# Automatically handle weekly CSV rollover on Fridays
-rollover_to_next_week()
