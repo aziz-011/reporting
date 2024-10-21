@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime
 
 
@@ -9,16 +10,23 @@ def get_current_week_and_year():
     return today.isocalendar()[1], today.year  # (week_number, year)
 
 
-# Initialize the DataFrame and keep it in session state to avoid reset on each interaction
+# Initialize the DataFrame and load from CSV if available
 def initialize_csv():
-    if 'df' not in st.session_state:
-        st.session_state.df = pd.DataFrame(
-            columns=["Machine Name", "Date Added", "Date Completed", "Analysis Completed"])
-
-    # Return the DataFrame from session state and CSV filename for download purposes
     week, year = get_current_week_and_year()
     csv_filename = f"week_{week}_{year}.csv"
-    return st.session_state.df, csv_filename
+
+    # Load from CSV if it exists
+    if os.path.exists(csv_filename):
+        df = pd.read_csv(csv_filename)
+    else:
+        df = pd.DataFrame(columns=["Machine Name", "Date Added", "Date Completed", "Analysis Completed"])
+
+    return df, csv_filename
+
+
+# Save DataFrame to CSV to persist data
+def save_to_csv(df, csv_filename):
+    df.to_csv(csv_filename, index=False)
 
 
 # Function to convert dataframe to CSV for download
@@ -26,7 +34,7 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 
-# Load machine data for the current week from session state
+# Load machine data for the current week from the CSV
 df, csv_filename = initialize_csv()
 
 
@@ -49,14 +57,14 @@ def add_machine(machine_number):
         "Date Completed": [None],
         "Analysis Completed": [False]
     })
-    st.session_state.df = pd.concat([st.session_state.df, new_row], ignore_index=True)
+    return pd.concat([df, new_row], ignore_index=True)
 
 
 # Function to mark machine as done and update the date of completion
 def mark_machine_as_done(machine_name):
     date_completed = datetime.now().strftime("%Y-%m-%d")
-    st.session_state.df.loc[st.session_state.df["Machine Name"] == machine_name, "Date Completed"] = date_completed
-    st.session_state.df.loc[st.session_state.df["Machine Name"] == machine_name, "Analysis Completed"] = True
+    df.loc[df["Machine Name"] == machine_name, "Date Completed"] = date_completed
+    df.loc[df["Machine Name"] == machine_name, "Analysis Completed"] = True
 
 
 # Main application starts here
@@ -75,7 +83,8 @@ if admin_login():
                                            key="machine_input")
 
     if st.sidebar.button("Add Machine"):
-        add_machine(machine_number)
+        df = add_machine(machine_number)
+        save_to_csv(df, csv_filename)  # Save the updated DataFrame to CSV
         st.sidebar.success(f"Machine ID{machine_number} added on {datetime.now().strftime('%Y-%m-%d')}.")
 
         # Reset the input field after adding a machine
@@ -83,10 +92,10 @@ if admin_login():
 
     # Display all machines for admin
     st.write("All Machines (including completed ones):")
-    st.write(st.session_state.df)
+    st.write(df)
 
     # Provide download link for CSV
-    csv_data = convert_df_to_csv(st.session_state.df)
+    csv_data = convert_df_to_csv(df)
     st.download_button(
         label="Download CSV",
         data=csv_data,
@@ -99,13 +108,14 @@ else:
     st.sidebar.write("Standard User Panel")
 
     # Filter machines to show only incomplete ones
-    visible_df = st.session_state.df[st.session_state.df["Analysis Completed"] == False]
+    visible_df = df[df["Analysis Completed"] == False]
 
     # Select machine and mark analysis as done
     if not visible_df.empty:
         machine = st.selectbox("Select a machine", visible_df["Machine Name"])
         if st.button(f"Mark {machine} as Done"):
             mark_machine_as_done(machine)
+            save_to_csv(df, csv_filename)  # Save the updated DataFrame to CSV
             st.success(f"Analysis for {machine} marked as completed on {datetime.now().strftime('%Y-%m-%d')}.")
     else:
         st.write("No pending machines for analysis.")
