@@ -1,42 +1,67 @@
 import streamlit as st
 import pandas as pd
-import os
+import sqlite3
 from datetime import datetime
 
+# Initialize SQLite connection
+def init_db():
+    conn = sqlite3.connect('machines.db')
+    c = conn.cursor()
 
-# Function to get the current week number and year
-def get_current_week_and_year():
-    today = datetime.now()
-    return today.isocalendar()[1], today.year  # (week_number, year)
+    # Create the table if it doesn't exist
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS machines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            machine_name TEXT NOT NULL,
+            date_added TEXT NOT NULL,
+            date_completed TEXT,
+            analysis_completed BOOLEAN NOT NULL
+        )
+    ''')
+    conn.commit()
+    return conn
 
+# Function to add a new machine to the database
+def add_machine_to_db(conn, machine_name):
+    c = conn.cursor()
+    date_added = datetime.now().strftime("%Y-%m-%d")
+    c.execute('''
+        INSERT INTO machines (machine_name, date_added, date_completed, analysis_completed)
+        VALUES (?, ?, NULL, 0)
+    ''', (machine_name, date_added))
+    conn.commit()
 
-# Initialize the DataFrame and load from CSV if available
-def initialize_csv():
-    week, year = get_current_week_and_year()
-    csv_filename = f"week_{week}_{year}.csv"
+# Function to mark a machine as done in the database
+def mark_machine_as_done_in_db(conn, machine_name):
+    c = conn.cursor()
+    date_completed = datetime.now().strftime("%Y-%m-%d")
+    c.execute('''
+        UPDATE machines
+        SET date_completed = ?, analysis_completed = 1
+        WHERE machine_name = ?
+    ''', (date_completed, machine_name))
+    conn.commit()
 
-    # Load from CSV if it exists
-    if os.path.exists(csv_filename):
-        df = pd.read_csv(csv_filename)
-    else:
-        df = pd.DataFrame(columns=["Machine Name", "Date Added", "Date Completed", "Analysis Completed"])
+# Function to get all machines from the database
+def get_all_machines(conn):
+    c = conn.cursor()
+    c.execute('SELECT * FROM machines')
+    rows = c.fetchall()
+    columns = ['ID', 'Machine Name', 'Date Added', 'Date Completed', 'Analysis Completed']
+    df = pd.DataFrame(rows, columns=columns)
+    return df
 
-    return df, csv_filename
+# Function to get only the incomplete machines
+def get_incomplete_machines(conn):
+    c = conn.cursor()
+    c.execute('SELECT * FROM machines WHERE analysis_completed = 0')
+    rows = c.fetchall()
+    columns = ['ID', 'Machine Name', 'Date Added', 'Date Completed', 'Analysis Completed']
+    df = pd.DataFrame(rows, columns=columns)
+    return df
 
-
-# Save DataFrame to CSV to persist data
-def save_to_csv(df, csv_filename):
-    df.to_csv(csv_filename, index=False)
-
-
-# Function to convert dataframe to CSV for download
-def convert_df_to_csv(df):
-    return df.to_csv(index=False).encode('utf-8')
-
-
-# Load machine data for the current week from the CSV
-df, csv_filename = initialize_csv()
-
+# Initialize SQLite database
+conn = init_db()
 
 # Admin login check
 def admin_login():
@@ -46,60 +71,32 @@ def admin_login():
         return True
     return False
 
-
-# Function to add a new machine with the suffix "ID"
-def add_machine(machine_number):
-    machine_name = f"ID{machine_number}"  # Automatically append "ID"
-    date_added = datetime.now().strftime("%Y-%m-%d")
-    new_row = pd.DataFrame({
-        "Machine Name": [machine_name],
-        "Date Added": [date_added],
-        "Date Completed": [None],
-        "Analysis Completed": [False]
-    })
-    return pd.concat([df, new_row], ignore_index=True)
-
-
-# Function to mark machine as done and update the date of completion
-def mark_machine_as_done(machine_name):
-    date_completed = datetime.now().strftime("%Y-%m-%d")
-    df.loc[df["Machine Name"] == machine_name, "Date Completed"] = date_completed
-    df.loc[df["Machine Name"] == machine_name, "Analysis Completed"] = True
-
-
 # Main application starts here
 st.title("Machine Analysis Tracking")
-
-# Initialize session state for machine number input
-if 'machine_number' not in st.session_state:
-    st.session_state['machine_number'] = ''
 
 # Admin Panel
 if admin_login():
     st.sidebar.write("Admin Panel")
 
     # Add a new machine with the suffix "ID"
-    machine_number = st.sidebar.text_input("Enter Machine Number:", value=st.session_state['machine_number'],
-                                           key="machine_input")
+    machine_number = st.sidebar.text_input("Enter Machine Number:", key="machine_input")
 
     if st.sidebar.button("Add Machine"):
-        df = add_machine(machine_number)
-        save_to_csv(df, csv_filename)  # Save the updated DataFrame to CSV
+        machine_name = f"ID{machine_number}"  # Automatically append "ID"
+        add_machine_to_db(conn, machine_name)
         st.sidebar.success(f"Machine ID{machine_number} added on {datetime.now().strftime('%Y-%m-%d')}.")
 
-        # Reset the input field after adding a machine
-        st.session_state['machine_number'] = ''  # Clear the input field
-
     # Display all machines for admin
+    df_all = get_all_machines(conn)
     st.write("All Machines (including completed ones):")
-    st.write(df)
+    st.write(df_all)
 
     # Provide download link for CSV
-    csv_data = convert_df_to_csv(df)
+    csv_data = df_all.to_csv(index=False).encode('utf-8')
     st.download_button(
         label="Download CSV",
         data=csv_data,
-        file_name=csv_filename,
+        file_name="machines.csv",
         mime='text/csv',
     )
 
@@ -108,18 +105,17 @@ else:
     st.sidebar.write("Standard User Panel")
 
     # Filter machines to show only incomplete ones
-    visible_df = df[df["Analysis Completed"] == False]
+    df_incomplete = get_incomplete_machines(conn)
 
     # Select machine and mark analysis as done
-    if not visible_df.empty:
-        machine = st.selectbox("Select a machine", visible_df["Machine Name"])
+    if not df_incomplete.empty:
+        machine = st.selectbox("Select a machine", df_incomplete["Machine Name"])
         if st.button(f"Mark {machine} as Done"):
-            mark_machine_as_done(machine)
-            save_to_csv(df, csv_filename)  # Save the updated DataFrame to CSV
+            mark_machine_as_done_in_db(conn, machine)
             st.success(f"Analysis for {machine} marked as completed on {datetime.now().strftime('%Y-%m-%d')}.")
     else:
         st.write("No pending machines for analysis.")
 
     # View machines that are pending analysis
     st.write("Machines pending analysis:")
-    st.write(visible_df)
+    st.write(df_incomplete)
