@@ -60,6 +60,12 @@ def get_incomplete_machines(conn):
     df = pd.DataFrame(rows, columns=columns)
     return df
 
+# Function to reset (delete all) machine data from the database
+def reset_all_machines(conn):
+    c = conn.cursor()
+    c.execute('DELETE FROM machines')  # Deletes all records in the table
+    conn.commit()
+
 # Initialize SQLite database
 conn = init_db()
 
@@ -99,6 +105,11 @@ if admin_login():
         file_name="machines.csv",
         mime='text/csv',
     )
+
+    # Reset Data Button for Admins
+    if st.sidebar.button("Reset All Data"):
+        reset_all_machines(conn)
+        st.sidebar.success("All machine data has been reset (deleted).")
 
 # Standard User View
 else:
